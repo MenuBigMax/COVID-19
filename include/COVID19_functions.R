@@ -48,10 +48,9 @@ ADD_TRANS_TAB <- function(l, oprt='+'){
 #idg=IDG;tm=H$all;sr=H$sr;cdday=H$cdday
 #idg=LAST_DAY;tm=H$all;sr=H$sr;cdday=H$cdday
 #idg=S[S$dt==7,];tm=H$all;sr=H$sr;cdday=H$cdday
-#LAST_DAY=EVOL_LAST_DAY(idg, H$all, H$sr, H$cdday)
-#LAST_DAY=EVOL_LAST_DAY(IDG, H$household, H$sr, H$cdday)
-#LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$household, H$sr, H$cdday)
-#S=SIMU_PERIOD(n=3, idg=IDG, tm=H$household, sr=H$sr, cdday=H$cdday)
+#LAST_DAY=EVOL_LAST_DAY(IDG, H$all, H$sr, H$cdday)
+#LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$all, H$sr, H$cdday)
+#S=SIMU_PERIOD(n=30, idg=IDG, tm=H$all, sr=H$sr, cdday=H$cdday)
 EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   # Test
   #if(idg$dt[1]%%10==0){
@@ -102,7 +101,7 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   idg$new_qt <- idg$new_qt-idg$new_inf
   
   #------------------------------------
-  # 3 - Infected takes a day
+  # 3 - Infected people take a day
   #------------------------------------
   i <- idg$dday>0
   if(sum(i)>0) idg$dday[i] <- idg$dday[i]+1
@@ -110,11 +109,16 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   #------------------------------------
   # 3 - Final return
   #------------------------------------
-  out <- list(SAME=idg[, c('liv', 'age', 'new_qt', 'dday', 'dt')])
-  out[['DEAD']] <- data.frame(liv=F, aggregate(new_death~age, data=idg, FUN=sum), dday=1, idg$dt[1])
-  out[['INFECTED']] <- data.frame(aggregate(new_inf~liv+age, data=idg, FUN=sum), dday=1, idg$dt[1])
-  for(i in 1:length(out)) colnames(out[[i]]) <- col
-
+  out <- list(
+    qt=idg[,colnames(idg)!='qt'],
+    death=data.frame(liv=F, dday=1, dt=idg$dt[1], aggregate(new_death~age, data=idg, FUN=sum)),
+    inf=data.frame(dday=1, dt=idg$dt[1], aggregate(new_inf~liv+age, data=idg, FUN=sum))
+  )
+  for(i in c('qt', 'death', 'inf')){
+    colnames(out[[i]])[colnames(out[[i]])==paste0('new_', i)] <- 'qt'
+    out[[i]] <- out[[i]][,col]
+  }
+  
   out <- do.call(rbind, out)
   rownames(out) <- c()
   # Going to the newt day
@@ -122,7 +126,17 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   return(out[out$qt>0,])
 }
 
-SIMU_PERIOD <- function(n, idg, tm, sr, cdday){
-  LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=tm, sr=sr, cdday=cdday)
-  if(n==1) return(LAST_DAY) else return(rbind(SIMU_PERIOD(n=n-1, idg=LAST_DAY, tm=tm, sr=sr, cdday=cdday), LAST_DAY))
+# Recursive function to calculate EVOL_LAST_DAY from 'idg' to 'dt_end' (range of date)
+
+SIMU_PERIOD <- function(dt_end, idg, tm, sr, cdday){
+  if(dt_end<=idg$dt[1]){
+    stop('You need to provide a further date of end.')
+  } else {
+    LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=tm, sr=sr, cdday=cdday)
+    if(LAST_DAY$dt[1]==dt_end){
+      return(LAST_DAY)
+    } else {
+      return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, tm=tm, sr=sr, cdday=cdday), LAST_DAY))
+    }
+  }
 }
