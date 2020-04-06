@@ -41,7 +41,20 @@ ADD_TRANS_TAB <- function(l, oprt='+'){
   }
 }
 
+# Take a data.frame 'data' with cumulated quantity over a date column 'dtcol'
+# Return the same data.frame but with new quantities each date
 
+UNCUMUL <- function(data, dtcol, qtcol, bycol=NULL){
+  n <- dim(data)[1]
+  if(is.null(bycol)){
+    data <- data[order(data[,c(dtcol,bycol)]),]
+    data[2:n, qtcol] <- data[2:n, qtcol]-data[1:(n-1), qtcol]
+  } else {
+    data <- do.call(rbind, by(data = data, INDICES = data[,bycol], FUN=UNCUMUL, dtcol=dtcol, qtcol=qtcol))
+    rownames(data) <- 1:n
+  }
+  return(data)
+}
 
 
 #rm(idg);rm(tm);rm(sr);rm(cdday)
