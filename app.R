@@ -50,9 +50,13 @@ D$KPI$tout_deces <- with(D$KPI, deces-deces_ehpad)
 D$KPI <- D$KPI[, c('date', 'tout_deces', 'hospitalises', 'gueris')]
 colnames(D$KPI) <- c('dt', 'death', 'infected', 'immunized')
 D$KPI$dt <- as.Date(D$KPI$dt, format='%Y-%m-%d')
+
 # Unpivot
 D$KPI <- melt(D$KPI, id.vars='dt')
-colnames(D$KPI) <- c('dt', 'kpi', 'qt_min') 
+colnames(D$KPI) <- c('dt', 'kpi', 'qt_min')
+D$KPI <- rbind(
+  cbind(D$KPI, cumul=T),
+  cbind(UNCUMUL(data=D$KPI, dtcol = 'dt', qtcol = 'qt_min', bycol='kpi'), cumul=F))
 
 #------------------------------------------------------------------------
 # 2.0 - INFECTIO-DEMOGRAPHY MATRIX : INITIALISATION
@@ -157,8 +161,10 @@ ui <- navbarPage(
                       a(href='https://www.insee.fr/fr/statistiques/1892088?sommaire=1912926', 'INSEE')
                ),
              tabPanel('Virus',
-                      h3('Cumulated measured effects of the pandemia'),
-                      plotOutput('d2'), 'Source', 
+                      h2('Different actual measures of the pandemia'),
+                      h3('New by day'), plotOutput('d2'),
+                      h3('Cumulated'), plotOutput('d3'),
+                      'Source', 
                       a(href='https://www.data.gouv.fr/fr/datasets/chiffres-cles-concernant-lepidemie-de-covid19-en-france/', 'data.gouv')
              )
            )
@@ -208,7 +214,10 @@ server <- function(input, output){
     ggplot(data=D$dFR, aes(x=age, y=qt))+geom_col(na.rm=TRUE)+ggtitle('Number of french people by age')
   })
   output$d2 <- renderPlot({
-    ggplot(data=D$KPI, aes(x=dt, y=qt_min, color=kpi))+geom_line(size = 2)
+    ggplot(data=D$KPI[!D$KPI$cumul,], aes(x=dt, y=qt_min, color=kpi))+geom_line(size = 2)
+  })
+  output$d3 <- renderPlot({
+    ggplot(data=D$KPI[D$KPI$cumul,], aes(x=dt, y=qt_min, color=kpi))+geom_line(size = 2)
   })
   # simulation output
   output$s1 <- renderPlot(ggplot(data=PL[[1]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[1]])
