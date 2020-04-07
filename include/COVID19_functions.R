@@ -56,6 +56,16 @@ UNCUMUL <- function(data, dtcol, qtcol, bycol=NULL){
   return(data)
 }
 
+# Take a demography and an initialisation data.Frames
+# Return a 'IDG' (INfecto-DemoGraphy) data.frame
+INIT_IDG <- function(demo, init){
+  idg <- cbind(liv=T, demo, dday=0, dt=init$dt[1])
+  idg <- merge(x=idg, y=init, by='age', all.x=T, all.y=F, suffixe=c('', '_init'))
+  idg$qt_init[is.na(idg$qt_init)] <- 0
+  idg$qt <- idg$qt-idg$qt_init
+  idg <- rbind(idg[, 1:5],H$init[,colnames(idg)[1:5]])
+  return(idg)
+}
 
 #rm(idg);rm(tm);rm(sr);rm(cdday)
 #idg=IDG;tm=H$all;sr=H$sr;cdday=H$cdday
