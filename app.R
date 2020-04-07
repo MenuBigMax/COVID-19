@@ -29,7 +29,6 @@ H$init$dt <- as.Date(H$init$dt, format='%d/%m/%y')
 H$init$liv <- H$init$liv=='VRAI'
 if(length(unique(H$init$dt))>1) warning('Be careful, this application doses not manage multi-date initialisation.')
 
-
 #------------------------------------------------------------------------
 # 1.0 - DATA
 #------------------------------------------------------------------------
@@ -38,6 +37,8 @@ if(length(unique(H$init$dt))>1) warning('Be careful, this application doses not 
 D <- list(dFR=read.csv('data/20190101_INSEE_demo_FR.csv', header=T, sep=';', dec=','))
 D$dFR <- aggregate(data=D$dFR, qt~age, FUN=sum)
 
+
+try(download.file(url = 'https://www.data.gouv.fr/fr/datasets/r/0b66ca39-1623-4d9c-83ad-5434b7f9e2a4', destfile='data/chiffres-cles.csv'))
 # Main KPI (death, infected, immunized) reported
 D$KPI <- read.csv('data/chiffres-cles.csv', header=T, sep=',')
 D$KPI <- aggregate(
@@ -70,13 +71,6 @@ D$KPI <- rbind(
 #   - in his age cluster (given by demography)
 #   - not infected (dday=0)
 
-IDG <- cbind(liv=T, D$dFR, dday=0, dt=H$init$dt[1])
-# 
-IDG <- merge(x=IDG, y=H$init, by='age', all.x=T, all.y=F, suffixe=c('', '_init'))
-IDG$qt_init[is.na(IDG$qt_init)] <- 0
-IDG$qt <- IDG$qt-IDG$qt_init
-
-IDG <- rbind(IDG[, 1:5],H$init[,colnames(IDG)[1:5]])
 
 
 #------------------------------------------------------------------------
@@ -85,7 +79,7 @@ IDG <- rbind(IDG[, 1:5],H$init[,colnames(IDG)[1:5]])
 
 # Main calulation
 S <- list(dend=Sys.Date())
-S$res <- SIMU_PERIOD(S$dend, idg=IDG, tm=H$all, sr=H$sr, cdday=H$cdday)
+S$res <- SIMU_PERIOD(S$dend, idg=INIT_IDG(demo=D$dFR, init=H$init), tm=H$all, sr=H$sr, cdday=H$cdday)
 
 # PLOTS
 H$ddaymax <- max(H$cdday$dday[H$cdday$pdeath==0|H$cdday$ctrans>0])
@@ -155,18 +149,19 @@ ui <- navbarPage(
   tabPanel('Actual data',
            tabsetPanel(
              type='tabs',
-             tabPanel('Demography', 
-                      h3('Demography by age'),
-                      plotOutput('d1'), 'Source',
-                      a(href='https://www.insee.fr/fr/statistiques/1892088?sommaire=1912926', 'INSEE')
-               ),
              tabPanel('Virus',
                       h2('Different actual measures of the pandemia'),
                       h3('New by day'), plotOutput('d2'),
                       h3('Cumulated'), plotOutput('d3'),
                       'Source', 
                       a(href='https://www.data.gouv.fr/fr/datasets/chiffres-cles-concernant-lepidemie-de-covid19-en-france/', 'data.gouv')
-             )
+             ),
+             tabPanel('Demography', 
+                      h3('Demography by age'),
+                      plotOutput('d1'), 'Source',
+                      a(href='https://www.insee.fr/fr/statistiques/1892088?sommaire=1912926', 'INSEE')
+               )
+             
            )
            
   ),
@@ -208,7 +203,7 @@ server <- function(input, output){
   output$h4 <- renderPlot({
     ggplot(data=melt(H$cdday[,2:4], id.vars='dday'), aes(x=dday, y=value, fill=variable))+geom_bar(position = "dodge", stat="identity")+ggtitle('Transmission coefficient and probabilty to death by disease day')
   })
-  output$h5 <- renderTable(aggregate(qt~dday+age, data=IDG[IDG$dday>0,], FUN=sum))
+  output$h5 <- renderTable(H$init)
   # Data output
   output$d1 <- renderPlot({
     ggplot(data=D$dFR, aes(x=age, y=qt))+geom_col(na.rm=TRUE)+ggtitle('Number of french people by age')
