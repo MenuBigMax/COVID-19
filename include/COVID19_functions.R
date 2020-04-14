@@ -1,4 +1,29 @@
 # ------------------------------------------------------------------------------------------------------------
+# Get a 'sce' data.frame with two date columns inside called 'dtstart', 'dtend'
+# Get two date limites 'dtstart' and 'dtend'
+# Return the scenario timeline between this limite
+
+GET_SCENAR_TIME <- function(sce, dtstart, dtend){
+  i <- is.na(sce$dtstart)
+  if(sum(i)>0) sce$dtstart[i] <- pmin(dtstart, sce$dtend[i], na.rm = T)
+  i <- is.na(sce$dtend)
+  if(sum(i)>0) sce$dtend[i] <- pmax(dtend, sce$dtstart[i], na.rm=T)
+  i <- sce$dtstart>dtend|sce$dtend<dtstart
+  if(sum(i)>0) sce <- sce[!i,]
+  sce$dtstart <- pmax(sce$dtstart, dtstart)
+  sce$dtend <- pmin(sce$dtend, dtend)
+  out <- seq(from=sce$dtstart[1], to=sce$dtend[1], by='day')
+  out <- data.frame(dt=out, sce[1, -(1:2)], row.names=1:length(out))
+  i <- format(out$dt, '%u') %in% 1:5
+  # Coefficient 0 to working days if specified
+  if(!(sce$flgwd[1]) & sum(i)>0) out$coeff[i] <- 0
+  # Coefficient 0 to week-end days if specified
+  if(!sce$flgwe[1] & sum(!i)>0) out$coeff[!i] <- 0
+  if(dim(sce)[1]>1) return(rbind(out, GET_SCENAR_TIME(sce=sce[-1,], dtstart=dtstart, dtend=dtend))) else return(out)
+}
+
+
+# ------------------------------------------------------------------------------------------------------------
 # Use to unpivot some data of assumption
 # Take a .csv file path of a "square" matrix
 # Return the same but unpivoted data
@@ -15,6 +40,22 @@ unpiv_triangl_csv <- function(file, col, header=T, sep='\t', dec=',', encoding='
   low <- data.frame(up[i,col[2]], up[i, col[1]], up[i, col[3]])
   colnames(low) <- col
   return(rbind(up, low))
+}
+
+# ------------------------------------------------------------------------------------------------------------
+# Take a small data.fame 'hp' containing parameters of the distribution
+# Return a data.fram with daily risk of death and transmission coefficient
+
+GET_DDAY<- function(pdday){
+  out <- dweibull(0:99+0.5, shape=pdday$shape[1], scale=pdday$scale[1])
+  i <- which(out>10^(-9))
+  out <- out[i]
+  out <- data.frame(liv=T, dday=i, pdeath=out/sum(out))
+  out$ctrans <- pmin(
+    c(tail(cumsum(out$pdeath), -pdday$lag[1]), rep(1, pdday$lag[1])),
+    c(rep(1,pdday$lag[1]), 1-head(cumsum(out$pdeath), -pdday$lag[1]))
+  )
+  return(rbind(data.frame(liv=T, dday=0, pdeath=0, ctrans=0), out)) 
 }
 
 # ------------------------------------------------------------------------------------------------------------
@@ -67,14 +108,14 @@ INIT_IDG <- function(demo, init){
   return(idg)
 }
 
-#rm(idg);rm(tm);rm(sr);rm(cdday)
-#idg=IDG;tm=H$all;sr=H$sr;cdday=H$cdday
-#idg=LAST_DAY;tm=H$all;sr=H$sr;cdday=H$cdday
-#idg=S[S$dt==7,];tm=H$all;sr=H$sr;cdday=H$cdday
-#LAST_DAY=EVOL_LAST_DAY(IDG, H$all, H$sr, H$cdday)
-#LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$all, H$sr, H$cdday)
-#S=SIMU_PERIOD(n=30, idg=IDG, tm=H$all, sr=H$sr, cdday=H$cdday)
-EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
+#rm(idg);rm(tm);rm(sr);rm(pdday)
+#idg=IDG;tm=H$all;sr=H$sr;pdday=H$pdday
+#idg=LAST_DAY;tm=H$all;sr=H$sr;pdday=H$pdday
+#idg=S[S$dt==7,];tm=H$all;sr=H$sr;pdday=H$pdday
+#LAST_DAY=EVOL_LAST_DAY(IDG, H$all, H$sr, H$pdday)
+#LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$all, H$sr, H$pdday)
+#S=SIMU_PERIOD(n=30, idg=IDG, tm=H$all, sr=H$sr, pdday=H$pdday)
+EVOL_LAST_DAY <- function(idg, tm, sr, pdday){
   # Test
   #if(idg$dt[1]%%10==0){
   #  print(
@@ -83,6 +124,7 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   #      sum(duplicated(idg[, c('liv', 'age', 'dday', 'dt')])),' duplicated records. Sum of people :', sum(idg$qt)))
   #}
   col <- colnames(idg)[1:5]
+  cdday <- GET_DDAY(pdday=pdday)
   
   #------------------------------------
   # 1 - New death
@@ -103,7 +145,6 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
   #------------------------------------
   # 2 - New infected
   #------------------------------------
-  
   # 2.1:  Report of the transmissibility coefficient by age
   idg2 <-  merge(x=idg[,c('liv', 'age', 'dday', 'ctrans', 'qt')], y=tm, by.x='age', by.y='agent', all.x=T, all.y=F)
   idg2$ntrans[is.na(idg2$ntrans)] <- 0
@@ -151,15 +192,15 @@ EVOL_LAST_DAY <- function(idg, tm, sr, cdday){
 
 # Recursive function to calculate EVOL_LAST_DAY from 'idg' to 'dt_end' (range of date)
 
-SIMU_PERIOD <- function(dt_end, idg, tm, sr, cdday){
+SIMU_PERIOD <- function(dt_end, idg, tm, sr, pdday){
   if(dt_end<=idg$dt[1]){
     stop('You need to provide a further date of end.')
   } else {
-    LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=tm, sr=sr, cdday=cdday)
+    LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=tm, sr=sr, pdday=pdday)
     if(LAST_DAY$dt[1]==dt_end){
       return(LAST_DAY)
     } else {
-      return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, tm=tm, sr=sr, cdday=cdday), LAST_DAY))
+      return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, tm=tm, sr=sr, pdday=pdday), LAST_DAY))
     }
   }
 }
