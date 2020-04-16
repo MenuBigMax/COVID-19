@@ -16,10 +16,11 @@ source('include/COVID19_functions.R')
 H <- list(
   sr=read.csv('data/20200406_DEATHRISK.csv', header=T, sep=';', dec=',', encoding='utf-8'),
   pdday=read.csv('data/20200408_DDAY_PARAM.csv', header=T, sep=';', dec=',', encoding='utf-8'),
-  sce=read.csv(file='data/20200414_TRANSMISS_SCENARIO.csv',header=T, sep=';', dec='.', encoding='utf-8'),
-  household=unpiv_triangl_csv(file='data/20200403_TRANSMISS_HOUSEHOLD.csv', col=c('agent', 'target', 'ntrans'), sep=';', encoding='utf-8'),
-  activity=unpiv_triangl_csv(file='data/20200403_TRANSMISS_ACTIVITY.csv', col=c('agent', 'target', 'ntrans'), sep=';', encoding='utf-8'),
-  init=read.csv('data/20200406_INIT_EPID.csv', header=T, sep=';', dec=',', encoding='utf-8')
+  sce=read.csv(file='data/PARAM_TRANSMISS_SCENARIO.csv',header=T, sep=';', dec='.', encoding='utf-8'),
+  home=UNPIV_TRIANGL_CSV(file='data/20200403_TRANSMISS_HOME.csv', col=c('agent', 'target', 'ntrans'), sep=';', dec=',', encoding='utf-8'),
+  activity=UNPIV_TRIANGL_CSV(file='data/20200403_TRANSMISS_ACTIVITY.csv', col=c('agent', 'target', 'ntrans'), sep=';', dec=',', encoding='utf-8'),
+  outdoor=UNPIV_TRIANGL_CSV(file='data/20200416_TRANSMISS_OUTDOOR.csv', col=c('agent', 'target', 'ntrans'), sep=';', dec=',', encoding='utf-8'),
+  init=read.csv('data/PARAM_INIT_EPID.csv', header=T, sep=';', dec=',', encoding='utf-8')
 )
 
 H$ddaymax <- max(GET_DDAY(H$pdday)$dday)+1
@@ -27,7 +28,7 @@ H$ddaymax <- max(GET_DDAY(H$pdday)$dday)+1
 
 
 # Conversaion of date field saved as characters in .csv
-H$init$dt <- as.Date(H$init$dt, format='%d/%m/%y')
+H$init$dt <- as.Date(H$init$dt, format='%Y-%m-%d')
 H$init$liv <- H$init$liv=='VRAI'
 if(length(unique(H$init$dt))>1) warning('Be careful, this application doses not manage multi-date initialisation.')
 H$sce$dtstart <- as.Date(H$sce$dtstart, format='%Y-%m-%d')
@@ -90,14 +91,20 @@ O$graph_init <- aggregate(data=O$init, loss~dt+age, FUN=median)
 #------------------------------------------------------------------------
 
 # New transmission matrix
-H$all <- ADD_TRANS_TAB(H[c('household', 'activity')])
+#H$all <- ADD_TRANS_TAB(H[c('household', 'activity')])
 
 # Main calulation
 S <- list(dend=Sys.Date()+21)
-S$sce.time <- GET_SCENAR_TIME(sce=H$sce, dtstart=min(H$init$dt), dtend=S$dend)
-S$all.trans <- rbind(data.frame(name='3-house', H$household), data.frame(name='2-aactivity', H$activity))
-S$sce <- merge(S$sce, y=S$all.trans, all.x=T, all.y=F, by='name')
-S$res <- SIMU_PERIOD(S$dend, idg=INIT_IDG(demo=D$dFR, init=H$init), tm=H$all, sr=H$sr, pdday=H$pdday)
+S$sce.time <- GET_SCENAR_TIME(sce=H$sce, dtstart=min(H$init$dt)-90, dtend=S$dend)
+S$all.trans <- rbind(
+  data.frame(name='3-home', H$home),
+  data.frame(name='2-activity', H$activity),
+  data.frame(name='1-outdoor', H$outdoor)
+  )
+S$sce <- merge(S$sce.time, y=S$all.trans, all.x=T, all.y=F, by='name')
+S$sce$ntrans <- S$sce$coeff*S$sce$ntrans
+S$sce <- aggregate(data=S$sce, ntrans~dt+agent+target, FUN=sum)
+S$res <- SIMU_PERIOD(S$dend, idg=INIT_IDG(demo=D$dFR, init=H$init), sce=S$sce, sr=H$sr, pdday=H$pdday)
 
 # PLOTS
 
@@ -123,9 +130,16 @@ PL <- lapply(PL, FUN=function(a) if(sum(a)>0) aggregate(qt~dt+age, data=S$res[a,
 # Graphical settings
 G <- list(
   xlim=xlim(H$init$dt[1], S$dend),
-  titsim=lapply(names(PL), function(a) ggtitle(paste0('Evolution of ',a, ' by age'))),
-  vert=geom_vline(xintercept = Sys.Date(), linetype='dotted', size=2) 
+  tithyp=lapply(levels(S$sce.time$name), function(a) ggtitle(paste0('Mean daily new transmission by age in ', a))),
+  titsim=lapply(names(PL), function(a) ggtitle(paste0('Evolution of ', a, ' by age'))),
+  vert=list(
+    init=geom_vline(aes(xintercept=H$init$dt[1]), linetype='dashed', size=2),
+    today=geom_vline(aes(xintercept=Sys.Date()), linetype='dashed', size=2)
+  ),
+  color=list(
+    tm=scale_fill_gradient(low='blue', high='red', limit=c(0,1))
   )
+)
 
 
 ui <- navbarPage(
@@ -152,19 +166,16 @@ ui <- navbarPage(
       tabsetPanel(
         type='tabs',
         tabPanel('Social',
-                 h3('Level of different type of diffusion '), plotOutput('h1'),
+                 h3('Scenario of diffusion in the area'), plotOutput('h11'),
                  h3('How many people do each agent infect...'),
-                 plotOutput('h2'),plotOutput('h3')
+                 plotOutput('h12'),plotOutput('h13'),plotOutput('h14')
         ),
         tabPanel('Virus',
-                 h3('Total risk of death when infected'), plotOutput('h4'),
-                 h3('Transmission coefficient and risk of death when infected'), plotOutput('h5'),
+                 h3('Total risk of death when infected'), plotOutput('h21'),
+                 h3('Transmission coefficient and risk of death when infected'), plotOutput('h22'),
                  'pdeath: probability of death during the disease',
                  'ctrans: transmission coefficient. Factor to evaluate the contagiousnes'
-        ),
-        tabPanel('Day 1',
-                 h3('Who was the first people infected in the country ?'), tableOutput('h6')
-      )
+        )
       )
   ),
   tabPanel('Actual data',
@@ -222,19 +233,22 @@ ui <- navbarPage(
 server <- function(input, output){
   
   # Hypothesis output
-  output$h1 <- renderPlot({
-    ggplot(data=S$sce.time, aes(x=dt, y=coeff, fill=name, color=name, order=))+geom_col(na.rm=TRUE)+ggtitle('Scenario of the transmission type over time')
+  output$h11 <- renderPlot({
+    ggplot(data=S$sce.time, aes(x=dt, y=coeff, fill=name, color=name))+geom_col(na.rm=TRUE)+G$vert$init+ggtitle('Scenario of the transmission type over time')
   })
-  output$h2 <- renderPlot({
-    ggplot(data=H$household, aes(x=agent, y=target))+geom_tile(aes(fill=ntrans), colour='white')+scale_fill_gradient(low='blue', high='red', limit=c(0,2))+ggtitle('Average daily new transmission by age into house')
+  output$h12 <- renderPlot({
+    ggplot(data=H$home, aes(x=agent, y=target))+geom_tile(aes(fill=ntrans), colour='white')+G$color$tm+G$tithyp[[3]]
   })
-  output$h3 <- renderPlot({
-    ggplot(data=H$activity, aes(x=agent, y=target))+geom_tile(aes(fill=ntrans), colour='white')+scale_fill_gradient(low='blue', high='red', limit=c(0,2))+ggtitle('Average daily new transmission by age during activity')
+  output$h13 <- renderPlot({
+    ggplot(data=H$activity, aes(x=agent, y=target))+geom_tile(aes(fill=ntrans), colour='white')+G$color$tm+G$tithyp[[2]]
   })
-  output$h4 <- renderPlot({
+  output$h14 <- renderPlot({
+    ggplot(data=H$activity, aes(x=agent, y=target))+geom_tile(aes(fill=ntrans), colour='white')+G$color$tm+G$tithyp[[1]]
+  })
+  output$h21 <- renderPlot({
     ggplot(data=H$sr, aes(x=age, y=sr))+geom_col(na.rm=TRUE)+ggtitle('Death risk when infected by age')
   })
-  output$h5 <- renderPlot({
+  output$h22 <- renderPlot({
     ggplot(data=melt(GET_DDAY(H$pdday)[,c('dday', 'pdeath', 'ctrans')], id.vars='dday'), aes(x=dday, y=value, fill=variable))+geom_bar(position = "dodge", stat="identity")+ggtitle('Transmission coefficient and probabilty to death by disease day')
   })
   output$h6 <- renderTable(H$init)
@@ -255,14 +269,14 @@ server <- function(input, output){
  
 
   # simulation output
-  output$s1 <- renderPlot(ggplot(data=PL[[1]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[1]]+G$vert)
-  output$s2 <- renderPlot(ggplot(data=PL[[2]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[2]]+G$vert)
-  output$s3 <- renderPlot(ggplot(data=PL[[3]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[3]]+G$vert)
-  output$s4 <- renderPlot(ggplot(data=PL[[4]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[4]]+G$vert)
-  output$s5 <- renderPlot(ggplot(data=PL[[5]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[5]]+G$vert)
-  output$s6 <- renderPlot(ggplot(data=PL[[6]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[6]]+G$vert)
-  output$s7 <- renderPlot(ggplot(data=PL[[7]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[7]]+G$vert)
-  output$s8 <- renderPlot(ggplot(data=PL[[8]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[8]]+G$vert)
+  output$s1 <- renderPlot(ggplot(data=PL[[1]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[1]]+G$vert$today)
+  output$s2 <- renderPlot(ggplot(data=PL[[2]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[2]]+G$vert$today)
+  output$s3 <- renderPlot(ggplot(data=PL[[3]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[3]]+G$vert$today)
+  output$s4 <- renderPlot(ggplot(data=PL[[4]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[4]]+G$vert$today)
+  output$s5 <- renderPlot(ggplot(data=PL[[5]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[5]]+G$vert$today)
+  output$s6 <- renderPlot(ggplot(data=PL[[6]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[6]]+G$vert$today)
+  output$s7 <- renderPlot(ggplot(data=PL[[7]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[7]]+G$vert$today)
+  output$s8 <- renderPlot(ggplot(data=PL[[8]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[8]]+G$vert$today)
   output$s9 <- renderPlot(ggplot(data=PL[[9]], aes(x=dt,y=qt, fill=age, color=age))+geom_col(na.rm=TRUE)+G$xlim+G$titsim[[9]]+G$vert)
 }
 
