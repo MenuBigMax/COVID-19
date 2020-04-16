@@ -29,7 +29,7 @@ GET_SCENAR_TIME <- function(sce, dtstart, dtend){
 # Return the same but unpivoted data
 # 'Colnames' should be a 3-sized vector
 
-unpiv_triangl_csv <- function(file, col, header=T, sep='\t', dec=',', encoding='utf-8'){
+UNPIV_TRIANGL_CSV <- function(file, col, header=T, sep='\t', dec=',', encoding='utf-8'){
   up <- read.csv(file, header=header, sep=sep, dec=dec, encoding=encoding)
   up <- melt(up, id.vars = 1, na.rm = T)
   colnames(up) <- col
@@ -191,16 +191,21 @@ EVOL_LAST_DAY <- function(idg, tm, sr, pdday){
 }
 
 # Recursive function to calculate EVOL_LAST_DAY from 'idg' to 'dt_end' (range of date)
-
-SIMU_PERIOD <- function(dt_end, idg, tm, sr, pdday){
+# dt_end=S$dend;idg=INIT_IDG(demo=D$dFR, init=H$init);sce=S$sce;sr=H$sr;pdday=H$pdday
+SIMU_PERIOD <- function(dt_end, idg, sce, sr, pdday){
   if(dt_end<=idg$dt[1]){
     stop('You need to provide a further date of end.')
   } else {
-    LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=tm, sr=sr, pdday=pdday)
-    if(LAST_DAY$dt[1]==dt_end){
-      return(LAST_DAY)
+    i <- sce$dt==idg$dt[1]
+    if(sum(i)<1){
+      stop(paste0('Date ', idg$dt[1], ' is missing in the scenario parameter'))
     } else {
-      return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, tm=tm, sr=sr, pdday=pdday), LAST_DAY))
+      LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=sce[i, c('agent', 'target', 'ntrans')], sr=sr, pdday=pdday)
+      if(LAST_DAY$dt[1]==dt_end){
+        return(LAST_DAY)
+      } else {
+        return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, sce=sce[!i,], sr=sr, pdday=pdday), LAST_DAY))
+      }
     }
   }
 }
