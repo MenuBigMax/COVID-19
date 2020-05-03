@@ -1,3 +1,18 @@
+# Try: NEXT_DAY_SIR(S=0.999, I=0.001, beta=0.2, lambda=21, dt=as.Date('2020-02-15'), n.max=3)
+NEXT_DAY_SIR <- function(S, I, beta, lambda, dt0, n.max=1, R.max=0){
+  if((S+I)>1|(S<0)|(I<0)) stop('S and I are to be parameters in [0,1] with sum <1')
+  if((beta<0)|(lambda<0)) stop('Beta and lambda are to be positive parameters')
+  # New healthy people
+  nS <- S-beta*S*I
+  # New infected people
+  nI <- I+beta*S*I-I/lambda
+  # New cured people
+  nR <- (1-S-I)+I/lambda
+  out <- rbind(data.frame(dt=dt0, type=c('S', 'I', 'R'), p=c(nS, nI, nR)))
+  if(n.max<=1|nR>R.max) return(out) else return(rbind(NEXT_DAY_SIR(S=nS, I=nI, beta=beta, lambda=lambda, dt0=dt0+1, n.max=n.max-1, R.max=R.max), out))
+}
+
+
 # ------------------------------------------------------------------------------------------------------------
 # Get a 'sce' data.frame with two date columns inside called 'dtstart', 'dtend'
 # Get two date limites 'dtstart' and 'dtend'
@@ -45,18 +60,16 @@ UNPIV_TRIANGL_CSV <- function(file, col, header=T, sep='\t', dec=',', encoding='
 # ------------------------------------------------------------------------------------------------------------
 # Take a small data.fame 'hp' containing parameters of the distribution
 # Return a data.fram with daily risk of death and transmission coefficient
-
-GET_DDAY<- function(pdday){
-  out <- dweibull(0:99+0.5, shape=pdday$shape[1], scale=pdday$scale[1])
-  i <- which(out>10^(-9))
-  out <- out[i]
-  out <- data.frame(liv=T, dday=i, pdeath=out/sum(out))
-  out$ctrans <- pmin(
-    c(tail(cumsum(out$pdeath), -pdday$lag[1]), rep(1, pdday$lag[1])),
-    c(rep(1,pdday$lag[1]), 1-head(cumsum(out$pdeath), -pdday$lag[1]))
-  )
+# Try: GET_DDAY(H$pdday, H$beta)
+# pdday=H$pdday;beta=H$beta;l=60
+GET_DDAY<- function(pdday, beta, l=60, lockdown=F){
+  out <- dweibull(1:l-0.5, shape=pdday$shape[1], scale=pdday$scale[1])
+  out <- data.frame(liv=T, dday=1:l, pdeath=out/sum(out))
+  out$ctrans <- pmin(outer(out$pdeath, beta$power, '^')%*%beta$value,1)
+  if(lockdown) out <- out[out$pdeath<0.05,]
   return(rbind(data.frame(liv=T, dday=0, pdeath=0, ctrans=0), out)) 
 }
+# out <- GET_DDAY(H$pdday, H$beta);plot(data=out, ctrans~dday, type='l', col='green');lines(data=out, pdeath~dday, col='blue')
 
 # ------------------------------------------------------------------------------------------------------------
 # Addition of transmission table
@@ -109,60 +122,85 @@ INIT_IDG <- function(demo, init){
 }
 
 #rm(idg);rm(tm);rm(sr);rm(pdday)
-#idg=IDG;tm=H$all;sr=H$sr;pdday=H$pdday
-#idg=LAST_DAY;tm=H$all;sr=H$sr;pdday=H$pdday
-#idg=S[S$dt==7,];tm=H$all;sr=H$sr;pdday=H$pdday
-#LAST_DAY=EVOL_LAST_DAY(IDG, H$all, H$sr, H$pdday)
-#LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$all, H$sr, H$pdday)
+# idg=INIT_IDG(demo=D$dFR, init=H$init); pdday=H$pdday; beta=H$beta; sr=H$sr; randommode=F
+# idg=LAST_DAY;pdday=H$pdday; beta=H$beta; sr=H$sr; randommode=F
+# LAST_DAY=EVOL_LAST_DAY(INIT_IDG(demo=D$dFR, init=H$init), H$pdday, H$beta, H$sr)
+# LAST_DAY=EVOL_LAST_DAY(LAST_DAY, H$pdday, H$beta, H$sr)
 #S=SIMU_PERIOD(n=30, idg=IDG, tm=H$all, sr=H$sr, pdday=H$pdday)
-EVOL_LAST_DAY <- function(idg, tm, sr, pdday){
+EVOL_LAST_DAY <- function(idg, pdday, beta, sr, randommode=F){
   # Test
-  #if(idg$dt[1]%%10==0){
+  #if(as.integer(format(idg$dt[1], '%d'))%%10==0){
   #  print(
   #    paste0(
   #      'Start calculating day :', idg$dt[1], '. IDG has ', dim(idg)[1], ' rows and ',
   #      sum(duplicated(idg[, c('liv', 'age', 'dday', 'dt')])),' duplicated records. Sum of people :', sum(idg$qt)))
   #}
   col <- colnames(idg)[1:5]
-  cdday <- GET_DDAY(pdday=pdday)
+  cdday <- GET_DDAY(pdday=pdday, beta=beta)
   
   #------------------------------------
   # 1 - New death
   #------------------------------------
   
-  # 1.1:  Report of the global survival risk by age
-  idg <- merge(idg, sr, on='age', all.x=T, all.y=F)
-  idg$sr[is.na(idg$sr)] <- 0
-  # 1.2:  Report of the transmission and death coefficient by disease date
-  idg <- merge(idg, cdday, on=c('liv', 'dday'), all.x=T, al.y=F)
-  idg$ctrans[is.na(idg$ctrans)] <- 0
-  idg$pdeath[is.na(idg$pdeath)] <- 0
-  # 1.3:  Death quantity is a binomial random draw
-  idg$new_death <- apply(X=idg[, c('qt', 'sr', 'pdeath')], MARGIN=1, function(r) rbinom(1,r[[1]],r[[2]]*r[[3]]))
-  # 1.4: Update of demography
-  idg$new_qt <- idg$qt-idg$new_death
-  
-  #------------------------------------
-  # 2 - New infected
-  #------------------------------------
-  # 2.1:  Report of the transmissibility coefficient by age
-  idg2 <-  merge(x=idg[,c('liv', 'age', 'dday', 'ctrans', 'qt')], y=tm, by.x='age', by.y='agent', all.x=T, all.y=F)
-  idg2$ntrans[is.na(idg2$ntrans)] <- 0
-  # 2.3:  Infected quantity is a Poisson random draw 
-  idg2$new_inf <- idg2$qt*sapply(X=idg2$ntrans*idg2$ctrans, FUN=rpois, n=1)
-  # 2.4:  Aggregation by age of target people
-  idg2 <- data.frame(dday=0, aggregate(new_inf~liv+target, data=idg2, FUN=sum))
-  # 2.5:  Report in the main table of the random number of infested people
-  idg <- merge(
-    x=idg, y=idg2,
-    by.x=c('liv', 'age', 'dday'), by.y=c('liv', 'target', 'dday'),
-    all.x=T, all.y=F
-  )
-  idg$new_inf[is.na(idg$new_inf)] <- 0
-  # 2.6:  Final infected quantity are min between the draw and the recevable population
-  idg$new_inf <- pmin(idg$new_inf, idg$new_qt)
-  # 2.7:  Update of demography
-  idg$new_qt <- idg$new_qt-idg$new_inf
+  # Is there living people ?
+  i <- idg$liv
+  if(sum(i)>0){
+    # 1.1:  Report of the global survival risk by age
+    idg <- merge(idg, sr, on='age', all.x=T, all.y=F)
+    idg$sr[is.na(idg$sr)] <- 0
+    # 1.2:  Report of the transmission and death coefficient by disease date
+    idg <- merge(idg, cdday, on=c('liv', 'dday'), all.x=T, al.y=F)
+    idg$ctrans[is.na(idg$ctrans)] <- 0
+    idg$pdeath[is.na(idg$pdeath)] <- 0
+    # 1.3:  Death quantity is a binomial random draw
+    #idg$new_death <- apply(X=idg[, c('qt', 'sr', 'pdeath')], MARGIN=1, function(r) rbinom(1,r[[1]],r[[2]]*r[[3]]))
+    if(randommode){
+      idg$new_death <- apply(X=idg[, c('qt', 'sr', 'pdeath')], MARGIN=1, function(r) rbinom(1,r[[1]],r[[2]]*r[[3]]))
+    } else {
+      idg$new_death <- idg$qt*idg$sr*idg$pdeath
+    }
+    # 1.4: Update of demography
+    idg$new_qt <- idg$qt-idg$new_death
+    
+    #------------------------------------
+    # 2 - New infected
+    #------------------------------------
+    
+    # Is there infectable people ?
+    i <- idg$liv&idg$dday<=0
+    if(sum(i)>0){
+      # 2.1:  Cartesian product. For each infected age, how many people can be infected ?
+      idg2 <-  merge(
+        x=cbind(j=T, idg[idg$liv&idg$dday>0, c('qt', 'ctrans')]),
+        y=cbind(j=T, idg[idg$liv&idg$dday<=0, c('age', 'qt')]),
+        by='j', all=T, suffixes=c('_from', '_to')
+      )
+      # 2.3:  Infected quantity is a Poisson random draw
+      if(randommode){
+        idg2$new_inf <- apply(X=idg2[, c('qt_from', 'qt_to', 'ctrans')], MARGIN=1, function(r) rbinom(1,r[[1]]*r[[2]],r[[3]]))
+      } else {
+        idg2$new_inf <- idg2$qt_from*idg2$qt_to*idg2$ctrans
+      }
+      # 2.4:  Aggregation by age of target people
+      idg2 <- data.frame(liv=T, dday=0, aggregate(new_inf~age, data=idg2, FUN=sum))
+      # 2.5:  Report in the main table of the random number of infested people
+      idg <- merge(
+        x=idg, y=idg2,
+        by=c('liv', 'age', 'dday'),
+        all.x=T, all.y=F
+      )
+      idg$new_inf[is.na(idg$new_inf)] <- 0
+      # 2.6:  Final infected quantity are min between the draw and the recevable population
+      idg$new_inf <- pmin(idg$new_inf, idg$new_qt)
+      # 2.7:  Update of demography
+      idg$new_qt <- idg$new_qt-idg$new_inf
+    } else {
+      idg$new_inf <- 0
+    }
+  } else {
+    idg$new_death <- 0
+    idg$new_inf <- 0
+  }
   
   #------------------------------------
   # 3 - Infected people take a day
@@ -191,8 +229,11 @@ EVOL_LAST_DAY <- function(idg, tm, sr, pdday){
 }
 
 # Recursive function to calculate EVOL_LAST_DAY from 'idg' to 'dt_end' (range of date)
-# dt_end=S$dend;idg=INIT_IDG(demo=D$dFR, init=H$init);sce=S$sce;sr=H$sr;pdday=H$pdday
-SIMU_PERIOD <- function(dt_end, idg, sce, sr, pdday){
+# Try: SIMU_PERIOD(as.Date('2020-01-01'), INIT_IDG(demo=D$dFR, init=H$init), H$pdday, H$beta, H$sr)
+
+# dt_end=S$dend; sce=S$sce; idg=INIT_IDG(demo=D$dFR, init=H$init); pdday=H$pdday; beta=H$beta; sr=H$sr
+# idg=EVOL_LAST_DAY(idg=idg, pdday=pdday, beta=beta, sr=sr)
+SIMU_PERIOD <- function(dt_end, sce, idg, pdday, beta, sr){
   if(dt_end<=idg$dt[1]){
     stop('You need to provide a further date of end.')
   } else {
@@ -200,12 +241,10 @@ SIMU_PERIOD <- function(dt_end, idg, sce, sr, pdday){
     if(sum(i)<1){
       stop(paste0('Date ', idg$dt[1], ' is missing in the scenario parameter'))
     } else {
-      LAST_DAY <- EVOL_LAST_DAY(idg=idg, tm=sce[i, c('agent', 'target', 'ntrans')], sr=sr, pdday=pdday)
-      if(LAST_DAY$dt[1]==dt_end){
-        return(LAST_DAY)
-      } else {
-        return(rbind(SIMU_PERIOD(dt_end=dt_end, idg=LAST_DAY, sce=sce[!i,], sr=sr, pdday=pdday), LAST_DAY))
+      # Effect of the scenario
+      beta$value <- beta$value*sce$coeff[i][1]
+      LAST_DAY <- EVOL_LAST_DAY(idg=idg, pdday=pdday, beta=beta, sr=sr)
+      if(LAST_DAY$dt[1]==dt_end) return(LAST_DAY) else return(rbind(LAST_DAY, SIMU_PERIOD(dt_end, sce, LAST_DAY, pdday, beta, sr)))
       }
     }
-  }
 }
